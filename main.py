@@ -10,15 +10,26 @@ CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 SOURCES = [
     {"name": "r/SteamGiveaways", "url": "https://www.reddit.com/r/steamgiveaways/hot.rss?limit=15"},
     {"name": "r/FreeGameFindings", "url": "https://www.reddit.com/r/FreeGameFindings/hot.rss?limit=15"},
-    {"name": "GamerPower", "url": "https://www.gamerpower.com/feed"}
+    {"name": "GamerPower", "url": "https://www.gamerpower.com/feed"},
+    # --- ДОБАВЛЕННЫЕ ИСТОЧНИКИ БАНДЛОВ ---
+    {"name": "Humble Bundle", "url": "https://www.humblebundle.com/rss"},
+    {"name": "Fanatical", "url": "https://www.fanatical.com/en/rss"},
+    {"name": "IndieGala", "url": "https://www.indiegala.com/rss"}
 ]
+
+# Слова, которые ДОЛЖНЫ быть в заголовке (чтобы ловить и ключи, и бандлы)
+GOOD_WORDS = ['key', 'keys', 'steam', 'epic', 'gog', '100%', 'bundle', 'humble', 'fanatical', 'indiegala', 'free', 'giveaway']
+
+# Слова, которых НЕ ДОЛЖНО быть (мусор, DLC, саундтреки)
+BAD_WORDS = ['weekend', 'beta', 'survey', 'task', 'dlc', 'soundtrack', 'ost', 'season pass', 'expansion']
 
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {
         "chat_id": CHAT_ID,
         "text": text,
-        "parse_mode": "HTML"
+        "parse_mode": "HTML",
+        "disable_web_page_preview": False # Оставляем False, чтобы Telegram генерировал красивые превью ссылок
     }
     try:
         response = requests.post(url, json=data, timeout=10)
@@ -30,7 +41,7 @@ def send_telegram_message(text):
         print(f"❌ Ошибка сети: {e}")
 
 def check_keys():
-    print("🔍 Начинаю проверку источников...")
+    print("🔍 Начинаю проверку источников (включая бандлы)...")
     now = datetime.now(timezone.utc)
     time_threshold = now - timedelta(hours=3) # Ищем раздачи за последние 3 часа
     
@@ -41,29 +52,35 @@ def check_keys():
             for entry in feed.entries:
                 title_lower = entry.title.lower()
                 
-                # Фильтр на ключи и бесплатные игры
-                if any(word in title_lower for word in ['key', 'keys', 'steam', 'epic', 'gog', '100%']):
-                    if not any(bad in title_lower for bad in ['weekend', 'beta', 'survey', 'task']):
-                        
-                        # Проверяем дату публикации
+                # 1. Проверка: есть ли ХОРОШИЕ слова
+                has_good_word = any(word in title_lower for word in GOOD_WORDS)
+                # 2. Проверка: НЕТ ли ПЛОХИХ слов
+                has_bad_word = any(bad in title_lower for bad in BAD_WORDS)
+                
+                if has_good_word and not has_bad_word:
+                    # Проверяем дату публикации безопасно
+                    try:
                         pub_date = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+                    except (TypeError, AttributeError):
+                        # Если даты в RSS нет или она кривая, считаем запись свежей
+                        pub_date = now 
+                    
+                    if pub_date > time_threshold:
+                        message = (
+                            f"🔥 <b>НОВАЯ РАЗДАЧА / БАНДЛ!</b>\n\n"
+                            f"🎮 <b>{entry.title}</b>\n"
+                            f"📌 Источник: {source['name']}\n"
+                            f"🔗 <a href='{entry.link}'>Забрать / Подробнее</a>"
+                        )
+                        print(f"🎯 Найдено: {entry.title}")
+                        send_telegram_message(message)
+                        found_any = True
                         
-                        if pub_date > time_threshold:
-                            message = (
-                                f"🔥 <b>НОВАЯ РАЗДАЧА!</b>\n\n"
-                                f"🎮 <b>{entry.title}</b>\n"
-                                f"📌 Источник: {source['name']}\n"
-                                f"🔗 <a href='{entry.link}'>Забрать ключ</a>"
-                            )
-                            print(f"🎯 Найдено: {entry.title}")
-                            send_telegram_message(message)
-                            found_any = True
-                            
         except Exception as e:
             print(f"⚠️ Ошибка с {source['name']}: {e}")
             
     if not found_any:
-        print("😴 Новых ключей за последние 3 часа не найдено.")
+        print("😴 Новых ключей или бандлов за последние 3 часа не найдено.")
 
 if __name__ == "__main__":
     if not BOT_TOKEN or not CHAT_ID:
